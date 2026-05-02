@@ -1,0 +1,47 @@
+# WSO2 Identity Server 7.0.0 — Phase 3: Agent Identity Demo
+#
+# WSO2 IS is a mature, enterprise-grade open-source IAM platform.
+# The ~1 GB image is the full Identity Server with the admin console.
+#
+# Admin console: https://localhost:9443/console  (admin/admin)
+# REST APIs:     https://localhost:9443/api/server/v1/...
+# OAuth2:        https://localhost:9443/oauth2/token
+#
+# For the agent identity demo, WSO2 models agents as:
+#   1. An "Application" of type Machine-to-Machine (M2M / service account)
+#   2. The application has OAuth 2.0 client credentials (client_id + client_secret)
+#   3. Client credentials grant → access token (JWT) representing the agent
+#   4. SCIM 2.0 provides lifecycle management (suspend, reactivate)
+
+services:
+
+  wso2is:
+    image: wso2/wso2is:7.0.0
+    container_name: wso2is
+    ports:
+      - "9443:9443"    # HTTPS — admin console + all APIs
+      - "9763:9763"    # HTTP (optional)
+    environment:
+      # Use default admin credentials for demo (change in production)
+      - WSO2_SERVER_OFFSET=0
+    volumes:
+      - wso2-data:/home/wso2carbon/wso2is-7.0.0/repository/data
+    healthcheck:
+      # WSO2 IS takes ~90-120 seconds to fully start
+      # The /services endpoint returns HTTP 200 when the server is ready
+      test:
+        - "CMD"
+        - "curl"
+        - "--silent"
+        - "--insecure"
+        - "--fail"
+        - "https://localhost:9443/api/server/v1/configs"
+        - "-u"
+        - "admin:admin"
+      interval: 15s
+      timeout:  10s
+      retries:  12
+      start_period: 90s
+
+volumes:
+  wso2-data:

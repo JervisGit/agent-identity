@@ -1,0 +1,79 @@
+# OpenA2A AIM — Phase 4: Agent Identity Demo
+#
+# Two ways to start AIM:
+#
+# OPTION A (recommended for demo): Clone the official repo and use their compose file.
+#   git clone https://github.com/opena2a-org/agent-identity-management
+#   cd agent-identity-management
+#   docker compose -f docker-compose.quickstart.yml up
+#   # Dashboard: http://localhost:3000  API: http://localhost:8080
+#
+# OPTION B: Use this minimal compose file (may need adjustment if upstream images change).
+#   docker compose -f docker/aim/docker-compose.yml up
+#
+# The demo script (09_aim_demo.py) uses the AIM server REST API at http://localhost:8080.
+# AIM_API_URL and AIM_DASHBOARD_URL can be overridden in .env.local.
+#
+# Architecture:
+#   aim-db:        PostgreSQL — stores agent identities, audit log, FGA policies
+#   aim-server:    Go HTTP API server — REST API for identity management
+#   aim-dashboard: Next.js web UI — visual management and audit trail
+
+services:
+
+  aim-db:
+    image: postgres:16-alpine
+    container_name: aim-db
+    environment:
+      POSTGRES_DB:       aim
+      POSTGRES_USER:     aim
+      POSTGRES_PASSWORD: aim_demo_pass_change_in_prod
+    volumes:
+      - aim-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U aim -d aim"]
+      interval: 5s
+      retries:  10
+      start_period: 10s
+
+  aim-server:
+    image: opena2a/aim-server:latest
+    container_name: aim-server
+    ports:
+      - "8080:8080"
+    depends_on:
+      aim-db:
+        condition: service_healthy
+    environment:
+      # AIM server expects individual Postgres connection vars, not a DATABASE_URL
+      POSTGRES_HOST:     "aim-db"
+      POSTGRES_PORT:     "5432"
+      POSTGRES_DB:       "aim"
+      POSTGRES_USER:     "aim"
+      POSTGRES_PASSWORD: "aim_demo_pass_change_in_prod"
+      POSTGRES_SSLMODE:  "disable"
+      # JWT secret for signing AIM-issued tokens
+      # NOTE: AIM uses Ed25519 (not RSA/ECDSA) — tokens will NOT validate
+      # in standard OAuth middleware expecting RS256/ES256.
+      JWT_SECRET:   "demo-secret-key-CHANGE-IN-PRODUCTION-min-32-chars"
+      PORT:         "8080"
+      ENV:          "development"
+    healthcheck:
+      test:     ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health || exit 1"]
+      interval: 10s
+      retries:  10
+      start_period: 15s
+
+  aim-dashboard:
+    image: opena2a/aim-dashboard:latest
+    container_name: aim-dashboard
+    ports:
+      - "3000:3000"
+    depends_on:
+      aim-server:
+        condition: service_healthy
+    environment:
+      NEXT_PUBLIC_API_URL: "http://localhost:8080"
+
+volumes:
+  aim-db-data:

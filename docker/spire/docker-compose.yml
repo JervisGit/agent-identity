@@ -1,0 +1,87 @@
+# SPIRE Docker Compose — Phase 2B: Workload Attestation Demo
+#
+# Architecture:
+#   spire-server  — Trust authority. Issues SVIDs. Maintains workload registry.
+#   spire-agent   — Runs on each "node". Attests workloads via OS kernel queries.
+#                   Shares a Unix socket (/tmp/spire-agent/public/api.sock) with workloads.
+#
+# The demo script (07_spire_demo.py) orchestrates:
+#   1. Start spire-server
+#   2. Generate a one-time join token via 'docker exec spire-server ... token generate'
+#   3. Start spire-agent with the join token (env var SPIRE_JOIN_TOKEN)
+#   4. Register workload entries (by Unix UID)
+#   5. Run 'docker exec --user <UID>' to simulate trusted/untrusted workloads
+#   6. Decode the returned JWT-SVIDs
+#
+# Why NOT on Azure Container Apps:
+#   - k8s attestor: requires kubelet API (not exposed to ACA containers)
+#   - azure_msi node attestor: targets Azure VMs, not ACA containers
+#   - IMDS (169.254.169.254): not accessible from ACA Consumption containers
+#   - Persistent state: SPIRE needs stable storage; ACA is ephemeral/scale-to-zero
+#   - Always-on: SPIRE agent MUST stay alive; ACA Consumption scales to zero
+#
+# For production "always on" SPIRE on Azure (cheapest options):
+#   - Azure Container Instances (ACI): ~$0.50-1/month for 0.25vCPU/0.5GB
+#   - App Service Basic B1: ~$13/month with "Always On" enabled
+#   - AKS: if you already have a cluster, SPIRE integrates natively via the k8s attestors
+
+services:
+
+  spire-server:
+    image: ghcr.io/spiffe/spire-server:1.9.6
+    container_name: spire-server
+    hostname: spire-server
+    volumes:
+      - ./server.conf:/opt/spire/conf/server/server.conf:ro
+      - spire-data:/opt/spire/data
+    ports:
+      - "8081:8081"    # gRPC API (used by SPIRE agents)
+    command:
+      - "-config"
+      - "/opt/spire/conf/server/server.conf"
+    healthcheck:
+      test:
+        - "CMD"
+        - "/opt/spire/bin/spire-server"
+        - "healthcheck"
+        - "-socketPath"
+        - "/tmp/spire-server/private/api.sock"
+      interval: 10s
+      timeout:  5s
+      retries:  10
+      start_period: 15s
+
+  spire-agent:
+    image: ghcr.io/spiffe/spire-agent:1.9.6
+    container_name: spire-agent
+    hostname: spire-agent
+    depends_on:
+      spire-server:
+        condition: service_healthy
+    volumes:
+      - ./agent.conf:/opt/spire/conf/agent/agent.conf:ro
+      - spire-agent-socket:/tmp/spire-agent/public
+    # The SPIRE agent image is distroless (no /bin/sh).
+    # Pass the join token directly on the command line using docker compose env interpolation.
+    command:
+      - "-config"
+      - "/opt/spire/conf/agent/agent.conf"
+      - "-joinToken"
+      - "${SPIRE_JOIN_TOKEN:-placeholder-must-be-set}"
+    # pid: "host" is not supported on Docker Desktop (Windows/WSL2) and is not
+    # needed for this demo — unix workload attestation uses the container-internal
+    # PID namespace, which is all we need for the docker exec --user demo.
+    environment:
+      SPIRE_JOIN_TOKEN: "${SPIRE_JOIN_TOKEN:-placeholder-must-be-set}"
+    profiles:
+      # Only started when explicitly requested via --profile agent
+      # The demo script (07_spire_demo.py) handles this via subprocess
+      - agent
+
+volumes:
+  spire-data:
+    # SPIRE server datastore (SQLite) — persists across restarts
+    # For production: replace with Postgres or mount Azure Files (NFS) on ACI/AKS
+  spire-agent-socket:
+    # Unix socket shared between the SPIRE agent daemon and workload processes
+    # In production k8s: this is a hostPath volume on each node
